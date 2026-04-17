@@ -5,9 +5,10 @@ let prevMouseX = 0;
 let prevMouseY = 0;
 let isMoving = false;
 let moveDecayTimer = 0;
+let stillGlow = 0;
 
 let fearParticles = [];
-let fearWords = [];
+let introWordPool = [];
 
 let presenceX = 0;
 let presenceY = 0;
@@ -26,9 +27,18 @@ let vignetteBuffer;
 let rockBuffer;
 
 // --- Constants ---
-const TOTAL_JOURNEY = 130000;
-const EMBRACE_START = 90000;
+const INTRO_THRESHOLD    = 20000;
+const TOTAL_JOURNEY      = 130000;
+const EMBRACE_START      = 90000;
 const MOVEMENT_THRESHOLD = 2;
+const ORBIT_R            = 108;
+
+const INTRO_WORD_LIST = ["still", "breathe", "deep", "dark", "alone", "hold"];
+
+const FEAR_WORDS = [
+  'run', 'flee', 'hide', 'escape', 'danger',
+  'away', 'back', 'not yet', 'wait', 'no'
+];
 
 const POEM_LINES = [
   { text: "you are not alone",                                   time: 5000,   type: "intro"      },
@@ -74,10 +84,17 @@ function setup() {
   prevMouseY = mouseY;
   lastMoveTime = millis();
 
-  fearWords = ['run', 'flee', 'hide', 'escape', 'danger', 'away', 'back', 'not yet', 'wait', 'no'];
-
+  buildIntroWords();
   buildRockBuffer();
   buildVignetteBuffer();
+}
+
+function buildIntroWords() {
+  introWordPool = [];
+  for (let i = 0; i < 6; i++) {
+    let angle = (i / 6) * TWO_PI + random(-0.15, 0.15);
+    introWordPool.push(new IntroWord(angle, INTRO_WORD_LIST[i]));
+  }
 }
 
 function draw() {
@@ -85,9 +102,21 @@ function draw() {
   updateInput(now);
   updateStillTime(now);
 
+  let poemTime = max(0, stillTime - INTRO_THRESHOLD);
+
   image(rockBuffer, 0, 0);
-  drawReaderLight();
-  drawPresence();
+  drawReaderLight(poemTime);
+
+  // Intro words: fade out only as the poem takes over
+  let introFade = constrain(map(poemTime, 0, 2500, 1.0, 0.0), 0, 1);
+  if (introFade > 0) {
+    for (let w of introWordPool) {
+      w.update(isMoving);
+      w.show(introFade);
+    }
+  }
+
+  drawPresence(poemTime);
   drawPoem();
   drawFearParticles();
   image(vignetteBuffer, 0, 0);
@@ -112,50 +141,63 @@ function updateStillTime(now) {
   if (isMoving) {
     stillTime = 0;
     lastMoveTime = now;
+    lastCompletedLineIdx = -1;
+    currentLineIdx = -1;
+    currentLineStartTime = 0;
     currentLineAlpha = max(0, currentLineAlpha - deltaTime * 0.4);
     presenceX = lerp(presenceX, presenceEdgeX, 0.04);
     presenceY = lerp(presenceY, presenceEdgeY, 0.04);
+    presenceAlpha = lerp(presenceAlpha, 0, 0.1);
+    presenceTransformT = lerp(presenceTransformT, 0, 0.04);
+    stillGlow = lerp(stillGlow, 0, 0.06);
     return;
   }
 
   stillTime = now - lastMoveTime;
+  stillGlow = lerp(stillGlow, 1, 0.025);
 
-  // Presence position
-  if (stillTime > 10000) {
-    let frac = constrain(map(stillTime, 10000, EMBRACE_START, 0, 1), 0, 1);
+  let poemTime = max(0, stillTime - INTRO_THRESHOLD);
+
+  if (poemTime > 10000) {
+    let frac = constrain(map(poemTime, 10000, EMBRACE_START, 0, 1), 0, 1);
     let eased = frac * frac * (3 - 2 * frac);
     let tx = lerp(presenceEdgeX, width / 2, eased);
     let ty = lerp(presenceEdgeY, height / 2, eased);
     presenceX = lerp(presenceX, tx, 0.025);
     presenceY = lerp(presenceY, ty, 0.025);
-    presenceAlpha = map(stillTime, 10000, 16000, 0, 80, true);
+    presenceAlpha = map(poemTime, 10000, 16000, 0, 80, true);
   } else {
-    presenceAlpha = 0;
+    presenceAlpha = lerp(presenceAlpha, 0, 0.05);
+    presenceX = lerp(presenceX, presenceEdgeX, 0.02);
+    presenceY = lerp(presenceY, presenceEdgeY, 0.02);
   }
 
-  if (stillTime > EMBRACE_START) {
-    presenceTransformT = constrain(map(stillTime, EMBRACE_START, EMBRACE_START + 12000, 0, 1), 0, 1);
+  if (poemTime > EMBRACE_START) {
+    presenceTransformT = constrain(map(poemTime, EMBRACE_START, EMBRACE_START + 12000, 0, 1), 0, 1);
   }
 
-  // Text
+  updateTextSystem(poemTime);
+}
+
+function updateTextSystem(poemTime) {
   let nextIdx = lastCompletedLineIdx + 1;
   if (nextIdx >= POEM_LINES.length) return;
 
   let nextLine = POEM_LINES[nextIdx];
-  if (stillTime < nextLine.time) {
-    if (currentLineIdx == nextIdx) {
-      currentLineAlpha = constrain(map(stillTime - currentLineStartTime, 0, 2000, 0, 255), 0, 255);
+  if (poemTime < nextLine.time) {
+    if (currentLineIdx === nextIdx) {
+      currentLineAlpha = constrain(map(poemTime - currentLineStartTime, 0, 2000, 0, 255), 0, 255);
     }
     return;
   }
 
-  if (currentLineIdx != nextIdx) {
+  if (currentLineIdx !== nextIdx) {
     currentLineIdx = nextIdx;
-    currentLineStartTime = stillTime;
+    currentLineStartTime = poemTime;
     currentLineAlpha = 0;
   }
 
-  let elapsed = stillTime - currentLineStartTime;
+  let elapsed = poemTime - currentLineStartTime;
   currentLineAlpha = constrain(map(elapsed, 0, 2000, 0, 255), 0, 255);
 
   if (elapsed > 4000) {
@@ -163,9 +205,14 @@ function updateStillTime(now) {
   }
 }
 
-function drawReaderLight() {
-  let growFrac = constrain(map(stillTime, 0, EMBRACE_START, 0, 1), 0, 1);
-  let r = lerp(60, 160, growFrac);
+function drawReaderLight(poemTime) {
+  let r;
+  if (stillTime < INTRO_THRESHOLD) {
+    r = 90;
+  } else {
+    let growFrac = constrain(map(poemTime, 0, EMBRACE_START, 0, 1), 0, 1);
+    r = lerp(90, 200, growFrac);
+  }
 
   if (presenceTransformT > 0) {
     r = lerp(r, max(width, height) * 0.55, presenceTransformT * 0.5);
@@ -173,25 +220,42 @@ function drawReaderLight() {
 
   let ctx = drawingContext;
   ctx.save();
-
   let cx = width / 2;
   let cy = height / 2;
 
-  let gCool = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-  gCool.addColorStop(0,   'rgba(40,30,80,0.5)');
-  gCool.addColorStop(0.4, 'rgba(20,15,50,0.3)');
-  gCool.addColorStop(1.0, 'rgba(0,0,0,0)');
-  ctx.fillStyle = gCool;
+  // Base orb — always visible and bright
+  let gBase = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  gBase.addColorStop(0,    'rgba(220,200,255,0.85)');
+  gBase.addColorStop(0.25, 'rgba(150,120,255,0.55)');
+  gBase.addColorStop(0.6,  'rgba(70,45,180,0.25)');
+  gBase.addColorStop(1.0,  'rgba(0,0,0,0)');
+  ctx.fillStyle = gBase;
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fill();
 
+  // Stillness glow — pulses in as the mouse settles
+  if (stillGlow > 0) {
+    let gr = r * 0.65;
+    let ga  = (stillGlow * 0.82).toFixed(3);
+    let ga2 = (stillGlow * 0.38).toFixed(3);
+    let gGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, gr);
+    gGlow.addColorStop(0,   'rgba(250,240,255,' + ga  + ')');
+    gGlow.addColorStop(0.5, 'rgba(190,165,255,' + ga2 + ')');
+    gGlow.addColorStop(1.0, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gGlow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, gr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Transformation warm glow
   if (presenceTransformT > 0) {
     let warmR = r * 1.9;
     let warmA = (presenceTransformT * 0.6).toFixed(3);
     let gWarm = ctx.createRadialGradient(cx, cy, 0, cx, cy, warmR);
     gWarm.addColorStop(0,   'rgba(255,220,100,' + warmA + ')');
-    gWarm.addColorStop(0.5, 'rgba(220,160,60,' + (presenceTransformT * 0.3).toFixed(3) + ')');
+    gWarm.addColorStop(0.5, 'rgba(220,160,60,'  + (presenceTransformT * 0.3).toFixed(3) + ')');
     gWarm.addColorStop(1,   'rgba(0,0,0,0)');
     ctx.fillStyle = gWarm;
     ctx.beginPath();
@@ -202,7 +266,7 @@ function drawReaderLight() {
   ctx.restore();
 }
 
-function drawPresence() {
+function drawPresence(poemTime) {
   if (presenceAlpha <= 0 && presenceTransformT <= 0) return;
 
   presenceBlobOffset += 0.004;
@@ -212,7 +276,6 @@ function drawPresence() {
   let baseR = 90;
   let noiseAmp = 42;
 
-  // Aura via drawingContext (outside push/pop — raw pixel coords)
   let ctx = drawingContext;
   ctx.save();
   let auraR = lerp(100, 280, presenceTransformT);
@@ -227,20 +290,13 @@ function drawPresence() {
   ctx.fill();
   ctx.restore();
 
-  // Blob body
   push();
   translate(px, py);
   noiseDetail(2, 0.6);
 
-  let darkR = 8;
-  let darkG = 5;
-  let darkB = 18;
-  let lightR = 255;
-  let lightG = 200;
-  let lightB = 60;
-  let blobR = floor(lerp(darkR, lightR, presenceTransformT));
-  let blobG = floor(lerp(darkG, lightG, presenceTransformT));
-  let blobB = floor(lerp(darkB, lightB, presenceTransformT));
+  let blobR = floor(lerp(8,   255, presenceTransformT));
+  let blobG = floor(lerp(5,   200, presenceTransformT));
+  let blobB = floor(lerp(18,   60, presenceTransformT));
   let blobA = lerp(presenceAlpha, 220, presenceTransformT);
 
   noStroke();
@@ -258,17 +314,15 @@ function drawPresence() {
   }
   endShape();
 
-  // Eyes
-  let eyeA = map(stillTime, 12000, 22000, 0, presenceAlpha * 0.6, true);
+  let eyeA = map(poemTime, 12000, 22000, 0, presenceAlpha * 0.6, true);
   eyeA = lerp(eyeA, presenceAlpha, presenceTransformT);
   let eyeR = floor(lerp(160, 255, presenceTransformT));
-  let eyeG = floor(lerp(70, 240, presenceTransformT));
-  let eyeB = floor(lerp(50, 100, presenceTransformT));
+  let eyeG = floor(lerp(70,  240, presenceTransformT));
+  let eyeB = floor(lerp(50,  100, presenceTransformT));
   fill(eyeR, eyeG, eyeB, eyeA);
   ellipse(-20, -12, 9, 6);
-  ellipse(20, -12, 9, 6);
+  ellipse(20,  -12, 9, 6);
 
-  // Soft inner glow
   fill(eyeR, eyeG, eyeB, eyeA * 0.1);
   ellipse(0, 0, 65, 50);
 
@@ -327,7 +381,7 @@ class FearParticle {
     this.vx = random(-0.7, 0.7);
     this.vy = random(2.5, 5.5);
     this.alpha = 190;
-    this.word = random(fearWords);
+    this.word = random(FEAR_WORDS);
     this.sz = random(11, 17);
   }
 
@@ -346,6 +400,79 @@ class FearParticle {
     textSize(this.sz);
     textStyle(NORMAL);
     fill(210, 85, 105, this.alpha);
+    text(this.word, this.x, this.y);
+    pop();
+  }
+}
+
+class IntroWord {
+  constructor(orbitAngle, word) {
+    this.orbitAngle = orbitAngle;
+    this.orbitR = ORBIT_R + random(-12, 12);
+    this.word = word;
+    this.sz = floor(random(34, 48));
+    this.baseAlpha = random(195, 230);
+
+    // Orbit target: fixed point around the orb
+    this.tx = width  / 2 + cos(orbitAngle) * this.orbitR;
+    this.ty = height / 2 + sin(orbitAngle) * this.orbitR;
+
+    // Spawn from the screen edge in the direction of the orbit angle
+    let dirX = cos(orbitAngle);
+    let dirY = sin(orbitAngle);
+    let margin = 55;
+    let tX = abs(dirX) > 0.001 ? (width  / 2 + margin) / abs(dirX) : 99999;
+    let tY = abs(dirY) > 0.001 ? (height / 2 + margin) / abs(dirY) : 99999;
+    let tEdge = min(tX, tY);
+
+    this.x = width  / 2 + dirX * tEdge + random(-35, 35);
+    this.y = height / 2 + dirY * tEdge + random(-35, 35);
+    this.spawnX = this.x;
+    this.spawnY = this.y;
+
+    this.vx = 0;
+    this.vy = 0;
+  }
+
+  update(moving) {
+    if (moving) {
+      // Push back toward the spawn edge
+      let dx = this.spawnX - this.x;
+      let dy = this.spawnY - this.y;
+      this.vx += dx * 0.01;
+      this.vy += dy * 0.01;
+      this.vx *= 0.88;
+      this.vy *= 0.88;
+    } else {
+      // Gentle gravity pulls words downward as they travel
+      this.vy += 0.022;
+
+      // Attraction toward orbit target
+      let dx = this.tx - this.x;
+      let dy = this.ty - this.y;
+      let d = sqrt(dx * dx + dy * dy);
+      if (d > 0.5) {
+        let strength = min(d * 0.0025, 0.08);
+        this.vx += (dx / d) * strength;
+        this.vy += (dy / d) * strength;
+      }
+
+      // Damping so they settle rather than orbit endlessly
+      this.vx *= 0.94;
+      this.vy *= 0.94;
+    }
+
+    this.x += this.vx;
+    this.y += this.vy;
+  }
+
+  show(fadeMultiplier) {
+    push();
+    noStroke();
+    textAlign(CENTER, CENTER);
+    textSize(this.sz);
+    textStyle(NORMAL);
+    fill(182, 160, 224, this.baseAlpha * fadeMultiplier);
     text(this.word, this.x, this.y);
     pop();
   }
@@ -382,33 +509,27 @@ function buildVignetteBuffer() {
 }
 
 function mouseMoved() {
-  handleMovement();
+  isMoving = true;
+  moveDecayTimer = 800;
 }
 
 function keyPressed() {
   isMoving = true;
   moveDecayTimer = 1200;
-  lastMoveTime = millis();
-  stillTime = 0;
   for (let i = 0; i < 6; i++) spawnFearParticle();
 }
 
 function touchMoved() {
-  handleMovement();
-  return false;
-}
-
-function handleMovement() {
   isMoving = true;
   moveDecayTimer = 800;
-  lastMoveTime = millis();
-  stillTime = 0;
+  return false;
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   presenceEdgeX = windowWidth * 0.82;
   presenceEdgeY = windowHeight * 0.12;
+  buildIntroWords();
   buildRockBuffer();
   buildVignetteBuffer();
 }
