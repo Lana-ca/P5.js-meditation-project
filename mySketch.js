@@ -5,6 +5,7 @@ let prevMouseX = 0;
 let prevMouseY = 0;
 let isMoving = false;
 let moveDecayTimer = 0;
+let stillGlow = 0;
 
 let fearParticles = [];
 let introWordPool = [];
@@ -30,12 +31,9 @@ const INTRO_THRESHOLD    = 20000;
 const TOTAL_JOURNEY      = 130000;
 const EMBRACE_START      = 90000;
 const MOVEMENT_THRESHOLD = 2;
+const ORBIT_R            = 108;
 
-const INTRO_WORD_LIST = [
-  "still", "breathe", "here", "quiet", "deep", "dark", "wait",
-  "listen", "alone", "fall", "rise", "soft", "rest", "hold",
-  "slow", "cave", "breath", "dark", "still", "deep", "here", "quiet"
-];
+const INTRO_WORD_LIST = ["still", "breathe", "deep", "dark", "alone", "hold"];
 
 const FEAR_WORDS = [
   'run', 'flee', 'hide', 'escape', 'danger',
@@ -86,12 +84,17 @@ function setup() {
   prevMouseY = mouseY;
   lastMoveTime = millis();
 
-  for (let i = 0; i < 22; i++) {
-    introWordPool.push(new IntroWord());
-  }
-
+  buildIntroWords();
   buildRockBuffer();
   buildVignetteBuffer();
+}
+
+function buildIntroWords() {
+  introWordPool = [];
+  for (let i = 0; i < 6; i++) {
+    let angle = (i / 6) * TWO_PI + random(-0.15, 0.15);
+    introWordPool.push(new IntroWord(angle, INTRO_WORD_LIST[i]));
+  }
 }
 
 function draw() {
@@ -104,7 +107,7 @@ function draw() {
   image(rockBuffer, 0, 0);
   drawReaderLight(poemTime);
 
-  // Intro words: visible until poem is underway
+  // Intro words: fade out only as the poem takes over
   let introFade = constrain(map(poemTime, 0, 2500, 1.0, 0.0), 0, 1);
   if (introFade > 0) {
     for (let w of introWordPool) {
@@ -138,7 +141,6 @@ function updateStillTime(now) {
   if (isMoving) {
     stillTime = 0;
     lastMoveTime = now;
-    // Full reset so poem starts from the top next time
     lastCompletedLineIdx = -1;
     currentLineIdx = -1;
     currentLineStartTime = 0;
@@ -147,13 +149,15 @@ function updateStillTime(now) {
     presenceY = lerp(presenceY, presenceEdgeY, 0.04);
     presenceAlpha = lerp(presenceAlpha, 0, 0.1);
     presenceTransformT = lerp(presenceTransformT, 0, 0.04);
+    stillGlow = lerp(stillGlow, 0, 0.06);
     return;
   }
 
   stillTime = now - lastMoveTime;
+  stillGlow = lerp(stillGlow, 1, 0.025);
+
   let poemTime = max(0, stillTime - INTRO_THRESHOLD);
 
-  // Presence position and alpha (keyed to poemTime so intro is presence-free)
   if (poemTime > 10000) {
     let frac = constrain(map(poemTime, 10000, EMBRACE_START, 0, 1), 0, 1);
     let eased = frac * frac * (3 - 2 * frac);
@@ -204,12 +208,10 @@ function updateTextSystem(poemTime) {
 function drawReaderLight(poemTime) {
   let r;
   if (stillTime < INTRO_THRESHOLD) {
-    // During intro: glow gently grows as words converge
-    let introFrac = constrain(map(stillTime, 0, INTRO_THRESHOLD, 0, 1), 0, 1);
-    r = lerp(35, 90, introFrac);
+    r = 90;
   } else {
     let growFrac = constrain(map(poemTime, 0, EMBRACE_START, 0, 1), 0, 1);
-    r = lerp(90, 180, growFrac);
+    r = lerp(90, 200, growFrac);
   }
 
   if (presenceTransformT > 0) {
@@ -221,21 +223,39 @@ function drawReaderLight(poemTime) {
   let cx = width / 2;
   let cy = height / 2;
 
-  let gCool = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-  gCool.addColorStop(0,   'rgba(40,30,80,0.5)');
-  gCool.addColorStop(0.4, 'rgba(20,15,50,0.3)');
-  gCool.addColorStop(1.0, 'rgba(0,0,0,0)');
-  ctx.fillStyle = gCool;
+  // Base orb — always visible and bright
+  let gBase = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  gBase.addColorStop(0,    'rgba(220,200,255,0.85)');
+  gBase.addColorStop(0.25, 'rgba(150,120,255,0.55)');
+  gBase.addColorStop(0.6,  'rgba(70,45,180,0.25)');
+  gBase.addColorStop(1.0,  'rgba(0,0,0,0)');
+  ctx.fillStyle = gBase;
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fill();
 
+  // Stillness glow — pulses in as the mouse settles
+  if (stillGlow > 0) {
+    let gr = r * 0.65;
+    let ga  = (stillGlow * 0.82).toFixed(3);
+    let ga2 = (stillGlow * 0.38).toFixed(3);
+    let gGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, gr);
+    gGlow.addColorStop(0,   'rgba(250,240,255,' + ga  + ')');
+    gGlow.addColorStop(0.5, 'rgba(190,165,255,' + ga2 + ')');
+    gGlow.addColorStop(1.0, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gGlow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, gr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Transformation warm glow
   if (presenceTransformT > 0) {
     let warmR = r * 1.9;
     let warmA = (presenceTransformT * 0.6).toFixed(3);
     let gWarm = ctx.createRadialGradient(cx, cy, 0, cx, cy, warmR);
     gWarm.addColorStop(0,   'rgba(255,220,100,' + warmA + ')');
-    gWarm.addColorStop(0.5, 'rgba(220,160,60,' + (presenceTransformT * 0.3).toFixed(3) + ')');
+    gWarm.addColorStop(0.5, 'rgba(220,160,60,'  + (presenceTransformT * 0.3).toFixed(3) + ')');
     gWarm.addColorStop(1,   'rgba(0,0,0,0)');
     ctx.fillStyle = gWarm;
     ctx.beginPath();
@@ -386,65 +406,73 @@ class FearParticle {
 }
 
 class IntroWord {
-  constructor() {
-    this._spawn();
-  }
+  constructor(orbitAngle, word) {
+    this.orbitAngle = orbitAngle;
+    this.orbitR = ORBIT_R + random(-12, 12);
+    this.word = word;
+    this.sz = floor(random(34, 48));
+    this.baseAlpha = random(195, 230);
 
-  _spawn() {
-    // Place each word just off a random edge
-    let edge = floor(random(4));
-    let margin = 40;
-    if (edge === 0) {        // top
-      this.x = random(width);
-      this.y = random(-margin, -10);
-    } else if (edge === 1) { // right
-      this.x = random(width + 10, width + margin);
-      this.y = random(height);
-    } else if (edge === 2) { // bottom
-      this.x = random(width);
-      this.y = random(height + 10, height + margin);
-    } else {                 // left
-      this.x = random(-margin, -10);
-      this.y = random(height);
-    }
+    // Orbit target: fixed point around the orb
+    this.tx = width  / 2 + cos(orbitAngle) * this.orbitR;
+    this.ty = height / 2 + sin(orbitAngle) * this.orbitR;
+
+    // Spawn from the screen edge in the direction of the orbit angle
+    let dirX = cos(orbitAngle);
+    let dirY = sin(orbitAngle);
+    let margin = 55;
+    let tX = abs(dirX) > 0.001 ? (width  / 2 + margin) / abs(dirX) : 99999;
+    let tY = abs(dirY) > 0.001 ? (height / 2 + margin) / abs(dirY) : 99999;
+    let tEdge = min(tX, tY);
+
+    this.x = width  / 2 + dirX * tEdge + random(-35, 35);
+    this.y = height / 2 + dirY * tEdge + random(-35, 35);
     this.spawnX = this.x;
     this.spawnY = this.y;
 
-    // Target: near center with variance so words cluster but don't stack
-    this.tx = width  / 2 + random(-70, 70);
-    this.ty = height / 2 + random(-50, 50);
-
-    this.word = random(INTRO_WORD_LIST);
-    this.alpha = 0;
-    this.sz = random(13, 21);
-    this.approachSpeed = random(0.006, 0.018);
+    this.vx = 0;
+    this.vy = 0;
   }
 
   update(moving) {
     if (moving) {
-      // Recede back toward the edge
-      this.x = lerp(this.x, this.spawnX, 0.05);
-      this.y = lerp(this.y, this.spawnY, 0.05);
+      // Push back toward the spawn edge
+      let dx = this.spawnX - this.x;
+      let dy = this.spawnY - this.y;
+      this.vx += dx * 0.01;
+      this.vy += dy * 0.01;
+      this.vx *= 0.88;
+      this.vy *= 0.88;
     } else {
-      // Drift toward center
-      this.x = lerp(this.x, this.tx, this.approachSpeed);
-      this.y = lerp(this.y, this.ty, this.approachSpeed);
+      // Gentle gravity pulls words downward as they travel
+      this.vy += 0.022;
+
+      // Attraction toward orbit target
+      let dx = this.tx - this.x;
+      let dy = this.ty - this.y;
+      let d = sqrt(dx * dx + dy * dy);
+      if (d > 0.5) {
+        let strength = min(d * 0.0025, 0.08);
+        this.vx += (dx / d) * strength;
+        this.vy += (dy / d) * strength;
+      }
+
+      // Damping so they settle rather than orbit endlessly
+      this.vx *= 0.94;
+      this.vy *= 0.94;
     }
 
-    // Alpha: 0 at the edges, brightest when close to center
-    let d = dist(this.x, this.y, width / 2, height / 2);
-    let maxD = max(width, height) * 0.65;
-    this.alpha = map(d, maxD, 55, 0, 165, true);
+    this.x += this.vx;
+    this.y += this.vy;
   }
 
   show(fadeMultiplier) {
-    if (this.alpha <= 0) return;
     push();
     noStroke();
     textAlign(CENTER, CENTER);
     textSize(this.sz);
     textStyle(NORMAL);
-    fill(175, 155, 200, this.alpha * fadeMultiplier);
+    fill(182, 160, 224, this.baseAlpha * fadeMultiplier);
     text(this.word, this.x, this.y);
     pop();
   }
@@ -501,10 +529,7 @@ function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   presenceEdgeX = windowWidth * 0.82;
   presenceEdgeY = windowHeight * 0.12;
-  introWordPool = [];
-  for (let i = 0; i < 22; i++) {
-    introWordPool.push(new IntroWord());
-  }
+  buildIntroWords();
   buildRockBuffer();
   buildVignetteBuffer();
 }
